@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Limit_Texes_Hold_em/Limit_Texes_Hold_em.vcxproj" Id="c4468fc3-36b4-4e05-9493-892f65aa292b" />
+</Solution>

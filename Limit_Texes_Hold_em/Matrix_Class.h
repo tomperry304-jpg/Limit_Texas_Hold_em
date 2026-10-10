@@ -132,12 +132,19 @@ public:
         }
     }
 
-    void subtracing_scaled_matrix_times_vec(std::vector<float>& other, std::vector<float> delta, float n) {
+    void subtracing_scaled_matrix_times_vec(const std::vector<float>& other, const std::vector<float>& delta, float n) {
         
         if (n_ == other.size() && m_ == delta.size()) {
+            const float* d = delta.data();
             for (std::size_t i = 0; i < n_; i++) {
-                for (std::size_t j = 0; j < m_; j++) {
-                    matrix_[i][j] -= other[i] * delta[j] * n;
+                if (other[i] != 0) {
+                    float* row = matrix_[i].data();
+                    const float a = other[i];
+                    
+                    for (std::size_t j = 0; j < m_; j++) {
+                        row[j] -= a * d[j] * n;
+                        
+                    }
                 }
             }
         }
@@ -232,59 +239,55 @@ public:
         throw std::invalid_argument("dimension mismatch");
     }
 
+    
 
+    
+    
     //Matrix * vec Multiplication
     friend std::vector<float> operator*(const std::vector<float>& vector, const Matrix& matrix) {
 
         if (matrix.n_ == vector.size()) {
-            int n_ = matrix.n_;
+            std::size_t n_ = matrix.n_;
+            std::size_t m_ = matrix.m_;
             std::vector<float> temp(matrix.m_, 0);
 
-            std::size_t ii = matrix.m_ - matrix.m_ % 2;
-#pragma omp parallel for schedule(dynamic)
-            for (std::size_t i = 0; i < ii; i += 2) {
-                float c0 = 0, c1 = 0, c2 = 0, c3 = 0;
-                for (std::size_t k = 0; k < n_; k++) {
-                    float a0 = matrix.matrix_[k][i], a1 = matrix.matrix_[k][i + 1];
-                    float b0 = vector[k];
-                    c0 += a0 * b0;
-                    c1 += a1 * b0;
+            float* out = temp.data();
+            for (std::size_t i = 0; i < n_; i++) {
+                if (vector[i] != 0) {
+                    const float* row = matrix.matrix_[i].data();
+                    const float v = vector[i];
+                    for (std::size_t k = 0; k < m_; k++) {
+                        out[k] += row[k] * v;
+                    }
                 }
-                temp[i] += c0;
-                temp[i + 1] += c1;
-            }
-            for (std::size_t i = ii; i < matrix.m_; i++) {
-                float c0 = 0;
-                for (std::size_t k = 0; k < n_; k++) {
-                    c0 += matrix.matrix_[k][i] * vector[k];
-                }
-                temp[i] += c0;
             }
 
             return temp;
         }
         throw std::invalid_argument("dimension mismatch");
     }
+    
+
 
     //Matrix * vec Multiplication (transposed)
-    friend std::vector<float> matrix_vec_multiply_transposed(const std::vector<float>& vector, const Matrix& matrix) {
+    friend std::vector<float> matrix_vec_multiply_transposed(const std::vector<float>& vector, const Matrix& matrix, const std::vector<float>& Sig_Delta) {
 
         if (matrix.m_ == vector.size()) {
             std::vector<float> temp(matrix.n_, 0);
-
-#pragma omp parallel for schedule(dynamic)
             for (std::size_t i = 0; i < matrix.n_; i++) {
-                float c0 = 0;
-                for (std::size_t k = 0; k < matrix.m_; k++) {
-                    c0 += matrix.matrix_[i][k] * vector[k];
+                if (Sig_Delta[i] != 0) {
+                    float c0 = 0;
+                    for (std::size_t k = 0; k < matrix.m_; k++) {
+                        c0 += matrix.matrix_[i][k] * vector[k] ;
+                    }
+                    temp[i] = c0 * Sig_Delta[i];
                 }
-                temp[i] = c0;
             }
-
             return temp;
         }
         throw std::invalid_argument("dimension mismatch");
     }
+
 
 
 

@@ -161,11 +161,7 @@ void weight_update(std::vector<Matrix>& WN, std::vector<float> input, int hidden
         std::vector<float> Sig_Delta(ak.size());
         std::transform(ak.begin(), ak.end(), Sig_Delta.begin(), delta_f_max);
         Sig_Delta[hidden_layer_size] = 0.0f;
-        std::vector<float> Deltak = matrix_vec_multiply_transposed(Delta_k[k], Wk);
-        int S = Deltak.size();
-        for (int l = 0; l < S; l++) {
-            Deltak[l] *= Sig_Delta[l];
-        }
+        std::vector<float> Deltak = matrix_vec_multiply_transposed(Delta_k[k], Wk , Sig_Delta);
         Delta_k.push_back(Deltak);
     }
     //grad W1 W2
@@ -263,7 +259,7 @@ std::vector<Matrix> WN_initilizer(int N, int hidden_layer_size, int n_hidden_lay
 int main() {
     omp_set_num_threads(1);
     std::cout << omp_get_max_threads() << " threads\n";
-    std::mt19937 shuffle_rng(8);
+    std::mt19937 shuffle_rng(7);
 
     int max_rounds = 2;
     int n_players = 2;
@@ -354,7 +350,7 @@ int main() {
     
 
     int N = gamstate_vec.size();
-    int gernerations = 50;
+    int gernerations = 15;
     int alpha = 2;
     int W_min = 128;
     int W_max = 1024;
@@ -363,8 +359,8 @@ int main() {
     int n_hidden_layers = L_min + floor(log2(n_players));
     int final_layer_size = 5;
 
-    int n_generations = 20;
-    int n_per_network_update = 10;
+    int n_generations = 60;
+    int n_per_network_update = 1;
 
     int P1 = ranks;
     int P2 = P1 * ranks;
@@ -398,6 +394,7 @@ int main() {
     //############################################################
 
     int max_capacity = 5000;
+    int strategy_capacity = 50000;
 
     long long N_regret_samples_colected = 0;
     long long N_stratagy_samples_colected = 0;
@@ -411,7 +408,7 @@ int main() {
             int player_traversing = (i + j) % n_players;
             std::vector<float> new_gamstate_vec = gamstate_vec;
             Decition_Node node_root = Decition_Node(last_agressor, cards_, n_players, history, round_history, round, player_contributions, pot, player_status, player_turn, new_gamstate_vec, round_actions_count, max_actions_r1, player_traversing, ranks, straight_lookup, P5,P4,P3,P2,P1, max_actions_r2_4,0, C, b0, max_rounds);
-            node_root.nerual_network_recursion( player_traversing, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec, j);
+            node_root.nerual_network_recursion( player_traversing, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec, j, strategy_capacity);
         }
         traverse_sec += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_a).count();
 
@@ -524,6 +521,7 @@ int main() {
 
     std::vector<Matrix> WN_stratagy = WN_initilizer(N, hidden_layer_size, n_hidden_layers, final_layer_size);
     double t_mean_stratagy = 0;
+    int strategy_generations = 50;
     for (int i = 0; i < stratagy_gamstate_training.size(); i++) {
         t_mean_stratagy += (stratagy_N_vec[i] + 1);
     }
@@ -532,11 +530,11 @@ int main() {
     network_count = 0;
     std::vector<int> stratagy_traing_order(stratagy_gamstate_training.size());
     std::iota(stratagy_traing_order.begin(), stratagy_traing_order.end(), 0);
-
-    for (int k = 0; k < gernerations; k++) {
+    float q_strat = (1 / f - 1) / strategy_generations;
+    for (int k = 0; k < strategy_generations; k++) {
         network_count++;
         std::shuffle(stratagy_traing_order.begin(), stratagy_traing_order.end(), shuffle_rng);
-        float n = n0 / (1 + q * network_count);
+        float n = n0 / (1 + q_strat * network_count);
         std::vector <std::vector<float>> stratagy_outputs;
         float a0_strat = 0;
         float stratagy_MSE = 0;
@@ -689,5 +687,26 @@ int main() {
         }
         std::cout << std::endl;
     }
+
+    {
+        std::vector<float> new_gamstate_vec = gamstate_vec;
+        Decition_Node start = Decition_Node(last_agressor, cards, n_players, history, round_history, round, player_contributions, pot, player_status, player_turn, new_gamstate_vec, round_actions_count, max_actions_r1, player_traversing, ranks, straight_lookup, P5, P4, P3, P2, P1, max_actions_r2_4, 0, C, b0, max_rounds);
+
+        auto print_actions = [](const std::string& label, const std::vector<std::string>& acts) {
+            std::cout << label << " : ";
+            for (const std::string& a : acts) std::cout << a << " ";
+            std::cout << std::endl;
+            };
+
+        print_actions("SB to act (start)", start.legal_actions());
+
+        Decition_Node after_limp = start.apply_action("call");
+        print_actions("BB after SB limp", after_limp.legal_actions());
+
+        Decition_Node after_raise = start.apply_action("raise");
+        print_actions("BB after SB raise", after_raise.legal_actions());
+    }
+
+
     return 0;
 } 

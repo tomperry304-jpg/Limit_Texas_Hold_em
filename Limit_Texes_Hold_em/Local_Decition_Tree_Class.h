@@ -149,6 +149,11 @@ public:
         if (last == "fold" || last == "call") {
             bool everyone_acted = (round_ != 1) || ((int)round_history_.size() >= n_seats);
             if ((player_turn_ == last_agressor_ && everyone_acted) || checking_call(n_seats)) return {};
+            float highest_contribution = *std::max_element(player_contributions_.begin(), player_contributions_.end());
+            if (player_contributions_[player_turn_] == highest_contribution) {
+                if (raises_this_round_ >= C_) return {"call" };
+                return {"call","raise" };
+            }
             if (raises_this_round_ >= C_) return { "fold","call" };
             return { "fold","call","raise" };
         }
@@ -539,12 +544,12 @@ public:
     }
 
 
-    std::vector<float> nerual_network_recursion( int player_traverser, std::mt19937& rng, std::vector <std::vector<float>>& regret_gamstate_training, std::vector <std::vector<float>>& regret_training, float max_pot, float max_player_contribution, int ranks, std::vector<Matrix>& WN, int hidden_layer_size, int n_hidden_layers, std::vector <std::vector<float>>& stratagy_training, int max_capacity, long long& N_regret_samples_colected, int C, const std::unordered_map<int, float>& hand_lookup_table, long long& N_stratagy_samples_colected, std::vector <std::vector<float>>& stratagy_gamstate_training, std::vector<int>& regret_N_vec, std::vector<int>& stratagy_N_vec, int t) {
+    std::vector<float> nerual_network_recursion( int player_traverser, std::mt19937& rng, std::vector <std::vector<float>>& regret_gamstate_training, std::vector <std::vector<float>>& regret_training, float max_pot, float max_player_contribution, int ranks, std::vector<Matrix>& WN, int hidden_layer_size, int n_hidden_layers, std::vector <std::vector<float>>& stratagy_training, int max_capacity, long long& N_regret_samples_colected, int C, const std::unordered_map<int, float>& hand_lookup_table, long long& N_stratagy_samples_colected, std::vector <std::vector<float>>& stratagy_gamstate_training, std::vector<int>& regret_N_vec, std::vector<int>& stratagy_N_vec, int t, int strategy_capacity) {
         std::vector<std::string> actions = legal_actions();
         if (actions.empty()) {
             if (n_seats_() != 1 && round_ < max_rounds_) {
                 Decition_Node child = new_round();
-                return child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec,stratagy_N_vec,t);
+                return child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec,stratagy_N_vec,t, strategy_capacity);
             }
             else {
                 return terminal_returns();
@@ -595,7 +600,7 @@ public:
 
 
 
-                    std::vector<float> exp = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training , regret_N_vec, stratagy_N_vec, t);
+                    std::vector<float> exp = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training , regret_N_vec, stratagy_N_vec, t, strategy_capacity);
                     exp_action_i.push_back(exp);
                     for (int l = 0; l < node_value.size(); l++) {
                         node_value[l] += p * exp[l];
@@ -649,19 +654,19 @@ public:
                 }
 
                 N_stratagy_samples_colected += 1;
-                if (N_stratagy_samples_colected <= max_capacity) {
+                if (N_stratagy_samples_colected <= strategy_capacity) {
                     stratagy_N_vec.push_back(t);
                     stratagy_gamstate_training.push_back(player_gamestate_vec);
                     stratagy_training.push_back(stratagy_training_node);
                 }
                 else {
                     std::vector<float> p_dist0;
-                    float p = (float)max_capacity / (float)N_stratagy_samples_colected;
+                    float p = (float)strategy_capacity / (float)N_stratagy_samples_colected;
                     p_dist0 = { p, 1 - p };
                     std::discrete_distribution<int> dist(p_dist0.begin(), p_dist0.end());
                     int chosen0 = dist(rng);
                     if (chosen0 == 0) {
-                        std::uniform_int_distribution<int> dist(0, max_capacity - 1);
+                        std::uniform_int_distribution<int> dist(0, strategy_capacity - 1);
                         int I = dist(rng);
                         stratagy_N_vec[I] = t;
                         stratagy_gamstate_training[I] = player_gamestate_vec;
@@ -671,7 +676,7 @@ public:
                 std::discrete_distribution<int> dist(p_dist.begin(), p_dist.end());
                 int chosen = dist(rng);
                 Decition_Node child = apply_action(actions[chosen]);
-                node_value = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec,t);
+                node_value = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec,t, strategy_capacity);
             }
             return node_value;
         }
@@ -1038,19 +1043,21 @@ public:
                 }
                 else {
                     int predetor_score = wining_card(predator);
+                    int opponent = 1 - predator;    
+                    float c1 = cards_[opponent * 2];
+                    float c2 = cards_[opponent * 2 + 1];
                     for (int j = 0; j < possible_hands.size(); j++) {
                         if (weight_vec[j] != 0) {
-                            std::vector<float> deal = cards_;
-                            int opponent = 1 - predator;
-                            deal[opponent * 2] = possible_hands[j][0];
-                            deal[opponent * 2 + 1] = possible_hands[j][1];
-                            Decition_Node child(last_agressor_, deal, n_players_, history_, round_history_, round_, player_contributions_, pot_, player_status_, player_turn_, gamestate_vec_, round_actions_count_, max_actions_r1_, player_traversing_, ranks_, strait_lookup_, P5_, P4_, P3_, P2_, P1_, max_actions_r2_4_, raises_this_round_, C_, b0_, max_rounds_);
-                            std::vector<float> v = child.exploitablity_terminal_returns(predator, predetor_score);
+                            cards_[opponent * 2] = possible_hands[j][0];
+                            cards_[opponent * 2 + 1] = possible_hands[j][1];
+                            std::vector<float> v = exploitablity_terminal_returns(predator, predetor_score);
                             for (int k = 0; k < n_players_; k++) {
                                 node_value[k] += v[k] * weight_vec[j];
                             }
                         }
                     }
+                    cards_[opponent * 2] = c1;
+                    cards_[opponent * 2 + 1] = c2;
                 }
                 return node_value;
             }
@@ -1061,15 +1068,15 @@ public:
             std::vector<std::vector<float>> opponent_strategy(possible_hands.size());
             
             if (player_turn_ != predator){
-            
+                std::string keystart;
+                for (auto& a : history_) keystart += (a != "check" ? a[0] : 'k');                 // f/c/k(check)/b/r: one char per action
+                keystart += '|';
+                for (int b = 0; b < (round_ >= 2 ? round_ + 1 : 0); b++)
+                    keystart += std::to_string((int)cards_[n_players_ * 2 + b]) + ',';
+                keystart += '|';
                 for (int j = 0; j < possible_hands.size(); j++) {
-
-                    std::string key;
-                    for (auto& a : history_) key += (a != "check" ? a[0]: 'k');                 // f/c/k(check)/b/r: one char per action
-                    key += '|';
-                    for (int b = 0; b < (round_ >= 2 ? round_ + 1 : 0); b++)
-                        key += std::to_string((int)cards_[n_players_ * 2 + b]) + ',';
-                    key += '|' + std::to_string((int)possible_hands[j][0]) + ',' + std::to_string((int)possible_hands[j][1]);
+                    std::string key = keystart;
+                    key +=  std::to_string((int)possible_hands[j][0]) + ',' + std::to_string((int)possible_hands[j][1]);
 
                     auto it = strat_cache.find(key);
                     if (it != strat_cache.end()) {

@@ -49,6 +49,9 @@ private:
 public:
     Decition_Node(int last_agressor, const std::vector<float>& cards, int n_players, const std::vector<std::string>& history, const std::vector<std::string>& round_history, int round, const std::vector<float>& player_contributions, float pot, const std::vector<std::string>& player_status, int player_turn, const std::vector<float>& gamestate_vec, int round_actions_count, int max_actions_r1, int player_traversing, int ranks, const std::vector <uint32_t>& strait_lookup, const long long P5, const long long P4, const long long P3, const long long P2, const long long P1, int max_actions_r2_4, int raises_this_round, int C, int b0, int max_rounds)
         : cards_(cards), history_(history), round_history_(round_history), round_(round),  player_contributions_(player_contributions), n_players_(n_players), pot_(pot), player_status_(player_status), player_turn_(player_turn), last_agressor_(last_agressor), gamestate_vec_(gamestate_vec), round_actions_count_(round_actions_count), max_actions_r1_(max_actions_r1), player_traversing_(player_traversing), ranks_(ranks), strait_lookup_(strait_lookup), P5_(P5), P4_(P4), P3_(P3),P2_(P2),P1_(P1), max_actions_r2_4_(max_actions_r2_4), raises_this_round_(raises_this_round), C_(C), b0_(b0), max_rounds_(max_rounds){
+
+        std::fill(gamestate_vec_.begin() + 2, gamestate_vec_.begin() + 12, 0.0f);
+        gamestate_vec_[12] = 0.0f;
         for (int i = 0; i < 2; i++) {
             int card = cards[player_traversing_*2 + i];
             int suit = card % 4;
@@ -59,6 +62,7 @@ public:
                 gamestate_vec_[12] = 1;
             }
         }
+        std::fill(gamestate_vec_.begin() + 40, gamestate_vec_.begin() + 40 + n_players_, 0.0f);
         gamestate_vec_[40 + player_traversing_] = 1;
     }
 
@@ -544,12 +548,12 @@ public:
     }
 
 
-    std::vector<float> nerual_network_recursion( int player_traverser, std::mt19937& rng, std::vector <std::vector<float>>& regret_gamstate_training, std::vector <std::vector<float>>& regret_training, float max_pot, float max_player_contribution, int ranks, std::vector<Matrix>& WN, int hidden_layer_size, int n_hidden_layers, std::vector <std::vector<float>>& stratagy_training, int max_capacity, long long& N_regret_samples_colected, int C, const std::unordered_map<int, float>& hand_lookup_table, long long& N_stratagy_samples_colected, std::vector <std::vector<float>>& stratagy_gamstate_training, std::vector<int>& regret_N_vec, std::vector<int>& stratagy_N_vec, int t, int strategy_capacity) {
+    std::vector<float> nerual_network_recursion( int player_traverser, std::mt19937& rng, std::vector <std::vector<float>>& regret_gamstate_training, std::vector <std::vector<float>>& regret_training, float max_pot, float max_player_contribution, int ranks, std::vector<Matrix>& WN, int hidden_layer_size, int n_hidden_layers, std::vector <std::vector<float>>& stratagy_training, int max_capacity, long long& N_regret_samples_colected, int C, const std::unordered_map<int, float>& hand_lookup_table, long long& N_stratagy_samples_colected, std::vector <std::vector<float>>& stratagy_gamstate_training, std::vector<int>& regret_N_vec, std::vector<int>& stratagy_N_vec, int t, int strategy_capacity, std::mt19937& resivour_rng) {
         std::vector<std::string> actions = legal_actions();
         if (actions.empty()) {
             if (n_seats_() != 1 && round_ < max_rounds_) {
                 Decition_Node child = new_round();
-                return child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec,stratagy_N_vec,t, strategy_capacity);
+                return child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec,stratagy_N_vec,t, strategy_capacity, resivour_rng);
             }
             else {
                 return terminal_returns();
@@ -600,7 +604,7 @@ public:
 
 
 
-                    std::vector<float> exp = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training , regret_N_vec, stratagy_N_vec, t, strategy_capacity);
+                    std::vector<float> exp = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training , regret_N_vec, stratagy_N_vec, t, strategy_capacity, resivour_rng);
                     exp_action_i.push_back(exp);
                     for (int l = 0; l < node_value.size(); l++) {
                         node_value[l] += p * exp[l];
@@ -623,10 +627,10 @@ public:
                     float p = (float)max_capacity / (float)N_regret_samples_colected;
                     p_dist0 = { p, 1 - p };
                     std::discrete_distribution<int> dist(p_dist0.begin(), p_dist0.end());
-                    int chosen0 = dist(rng);
+                    int chosen0 = dist(resivour_rng);
                     if (chosen0 == 0) {
                         std::uniform_int_distribution<int> dist(0, max_capacity - 1);
-                        int I = dist(rng);
+                        int I = dist(resivour_rng);
                         regret_N_vec[I] = t;
                         regret_gamstate_training[I] = gamstate_training_node;
                         regret_training[I] = regrets_training_node;
@@ -664,10 +668,10 @@ public:
                     float p = (float)strategy_capacity / (float)N_stratagy_samples_colected;
                     p_dist0 = { p, 1 - p };
                     std::discrete_distribution<int> dist(p_dist0.begin(), p_dist0.end());
-                    int chosen0 = dist(rng);
+                    int chosen0 = dist(resivour_rng);
                     if (chosen0 == 0) {
                         std::uniform_int_distribution<int> dist(0, strategy_capacity - 1);
-                        int I = dist(rng);
+                        int I = dist(resivour_rng);
                         stratagy_N_vec[I] = t;
                         stratagy_gamstate_training[I] = player_gamestate_vec;
                         stratagy_training[I] = stratagy_training_node;
@@ -676,7 +680,7 @@ public:
                 std::discrete_distribution<int> dist(p_dist.begin(), p_dist.end());
                 int chosen = dist(rng);
                 Decition_Node child = apply_action(actions[chosen]);
-                node_value = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec,t, strategy_capacity);
+                node_value = child.nerual_network_recursion( player_traverser, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec,t, strategy_capacity, resivour_rng);
             }
             return node_value;
         }

@@ -256,10 +256,30 @@ std::vector<Matrix> WN_initilizer(int N, int hidden_layer_size, int n_hidden_lay
 }
 
 
+std::vector<float> forward_pass(std::vector<Matrix>& WN, std::vector<float> input, int hidden_layer_size, int n_hidden_layers) {
+    // forward pass
+    std::vector<float> l1_w1 = input * WN[0];
+    std::vector<float> a1(hidden_layer_size + 1);
+    std::transform(l1_w1.begin(), l1_w1.end(), a1.begin(), f_max);
+    a1[hidden_layer_size] = 1;
+    std::vector<std::vector<float>> an;
+    an.push_back(a1);
+    for (int k = 0; k < n_hidden_layers - 1; k++) {
+        std::vector<float> lk_wk = an[k] * WN[k + 1];
+        std::vector<float> ak(hidden_layer_size + 1);
+        std::transform(lk_wk.begin(), lk_wk.end(), ak.begin(), f_max);
+        ak[hidden_layer_size] = 1;
+        an.push_back(ak);
+    }
+    std::vector<float> lfinal_wfinal = an.back() * WN[n_hidden_layers];
+    return lfinal_wfinal;
+}
+
+
 int main() {
     omp_set_num_threads(1);
     std::cout << omp_get_max_threads() << " threads\n";
-    std::mt19937 shuffle_rng(7);
+    std::mt19937 shuffle_rng(8);
 
     int max_rounds = 2;
     int n_players = 2;
@@ -338,6 +358,7 @@ int main() {
 
 
     std::mt19937 rng(42);
+    std::mt19937 reservoir_rng(123);
 
     int last_agressor = bb;
 
@@ -359,7 +380,7 @@ int main() {
     int n_hidden_layers = L_min + floor(log2(n_players));
     int final_layer_size = 5;
 
-    int n_generations = 60;
+    int n_generations = 60   ;
     int n_per_network_update = 1;
 
     int P1 = ranks;
@@ -393,7 +414,7 @@ int main() {
     //######################################################
     //############################################################
 
-    int max_capacity = 5000;
+    int max_capacity = 50000;
     int strategy_capacity = 50000;
 
     long long N_regret_samples_colected = 0;
@@ -405,22 +426,54 @@ int main() {
         auto t_a = std::chrono::steady_clock::now();
         for (int i = 0; i < Cards_Dealt_per_loop; i++) {
             std::vector<float> cards_ = hand(deck, rng,n_players);
+
+
             int player_traversing = (i + j) % n_players;
             std::vector<float> new_gamstate_vec = gamstate_vec;
             Decition_Node node_root = Decition_Node(last_agressor, cards_, n_players, history, round_history, round, player_contributions, pot, player_status, player_turn, new_gamstate_vec, round_actions_count, max_actions_r1, player_traversing, ranks, straight_lookup, P5,P4,P3,P2,P1, max_actions_r2_4,0, C, b0, max_rounds);
-            node_root.nerual_network_recursion( player_traversing, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec, j, strategy_capacity);
+            node_root.nerual_network_recursion( player_traversing, rng, regret_gamstate_training, regret_training, max_pot, max_player_contribution, ranks, WN, hidden_layer_size, n_hidden_layers, stratagy_training, max_capacity, N_regret_samples_colected, C, hand_lookup_table, N_stratagy_samples_colected, stratagy_gamstate_training, regret_N_vec, stratagy_N_vec, j, strategy_capacity, reservoir_rng);
         }
         traverse_sec += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_a).count();
 
         if (j % n_per_network_update == 0) {
-            std::vector<int> regret_traing_order(regret_gamstate_training.size());
-            std::iota(regret_traing_order.begin(), regret_traing_order.end(), 0);
+
             WN = WN_initilizer(N, hidden_layer_size, n_hidden_layers, final_layer_size);
             auto t_b = std::chrono::steady_clock::now();
             
             network_count = 0;
             double t_mean_reg = 0;
             
+            std::vector<int> regret_all_order(regret_gamstate_training.size());
+            std::iota(regret_all_order.begin(), regret_all_order.end(), 0);
+            std::shuffle(regret_all_order.begin(), regret_all_order.end(), shuffle_rng);
+
+            std::size_t n_val = regret_all_order.size() / 10;
+
+            std::vector<int> regret_val_order(regret_all_order.begin(), regret_all_order.begin() + n_val);
+            std::vector<int> regret_train_order(regret_all_order.begin() + n_val, regret_all_order.end());
+
+
+
+            std::vector<float> val_mean(5, 0.0f);
+            for (int i = 0; i < regret_val_order.size(); i++) {
+                for (int j = 0; j < 5; j++) {
+                    val_mean[j] += regret_training[regret_val_order[i]][j]/max_pot;
+                }
+            }
+            for (int j = 0; j < 5; j++) val_mean[j] /= regret_val_order.size();
+
+            float val_target_var = 0;
+            for (int i = 0; i < regret_val_order.size(); i++) {
+                for (int j = 0; j < 5; j++) {
+                    float d = regret_training[regret_val_order[i]][j] / max_pot - val_mean[j];
+                    val_target_var += d * d;
+                }
+            }
+            val_target_var /= (regret_val_order.size() * 5);
+
+
+
+
             for (int i = 0; i < regret_gamstate_training.size(); i++) {
                 t_mean_reg += (regret_N_vec[i] + 1);
             }
@@ -436,12 +489,14 @@ int main() {
 
 
             std::vector <std::vector<float>> outputs;
-            
+            float best_val = 1e30f;
+            int best_epoch = -1;
+            std::vector<Matrix> best_WN = WN;
 
             for (int k = 0; k < gernerations; k++) {
                 network_count++;
 
-                std::shuffle(regret_traing_order.begin(), regret_traing_order.end(), shuffle_rng);
+                std::shuffle(regret_train_order.begin(), regret_train_order.end(), shuffle_rng);
                 float a0_regret = 0;
                 
                 float n = n0 / (1 + q * network_count);
@@ -453,8 +508,8 @@ int main() {
 
                 std::vector<float> acumulator(5,0);
                 
-                for (int i = 0; i < regret_gamstate_training.size(); i++) {
-                    int idx = regret_traing_order[i];
+                for (int i = 0; i < regret_train_order.size(); i++) {
+                    int idx = regret_train_order[i];
                     std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, regret_gamstate_training[idx], C, hand_lookup_table, max_rounds);
                     input.push_back(1);
                     std::vector<float> output = regret_normalisation(max_pot, regret_training[idx]);
@@ -466,32 +521,47 @@ int main() {
                     outputs.push_back(output);
                 }
                 for (int j = 0; j < 5; j++) {
-                    acumulator[j] /= regret_gamstate_training.size();
+                    acumulator[j] /= regret_train_order.size();
                 }
-                for (int i = 0; i < regret_gamstate_training.size(); i++) {
+                for (int i = 0; i < regret_train_order.size(); i++) {
                     for (int j = 0; j < 5; j++) {
                         regret_MSE += ((outputs[i][j] - acumulator[j]) * (outputs[i][j] - acumulator[j]));
                     }
                 }
 
+                float reg_err = 0;
+                for (int i = 0; i < regret_val_order.size(); i++) {
+                    int idx = regret_val_order[i];
+                    std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, regret_gamstate_training[idx], C, hand_lookup_table, max_rounds);
+                    input.push_back(1);
+                    std::vector<float> prediction = forward_pass(WN, input, hidden_layer_size, n_hidden_layers);
+                    std::vector<float> target = regret_normalisation(max_pot, regret_training[idx]);
+                    for (int j = 0; j < 5; j++) {
+                        reg_err += (target[j] - prediction[j]) * (target[j] - prediction[j]);
+                    }
+                }
+                float val_ratio = reg_err / (regret_val_order.size() * 5) / val_target_var;
+
+                a0_regret /= (regret_train_order.size() * 5);
+                regret_MSE /= regret_train_order.size() * 5;
+                std::cout <<"j = " << j << "  k = " << k << "  train = " << a0_regret / regret_MSE << "  val = " << val_ratio << std::endl;
+                if (val_ratio < best_val) {
+                    best_val = val_ratio; best_epoch = k; best_WN = WN  ;
+                }
+
+
+
+
                 
-
-
-
-
-                a0_regret /= (regret_gamstate_training.size() * 5);
-                
-                std::cout << "k = " << k << " a0_regret = " << a0_regret << std::endl;
-
-                regret_MSE /= regret_gamstate_training.size()*5;
-                
-                std::cout << "k = "<< k << " regret_MSE = " << regret_MSE << std::endl;
-                std::cout << "a0_regret / regret_MSE = " << a0_regret / regret_MSE << std::endl;
-                
-                std::cout << "j = " << j << std::endl;
             }
-            train_sec += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_b).count();
 
+
+            
+
+
+
+            train_sec += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_b).count();
+            WN = best_WN;
             int z = WN.size();
             for (int i = 0; i < z; i++) {
                 const Matrix& WN_i = WN[i];
@@ -505,9 +575,8 @@ int main() {
                     }
                 }
             }
-            
             WN_save(WN, file_name + "_" + std::to_string(j) + " max_rounds " + std::to_string(max_rounds) + ".bin");
-            
+            std::cout << "best epoch = " << best_epoch << "  best val = " << best_val << std::endl;
         }
         
 
@@ -521,19 +590,58 @@ int main() {
 
     std::vector<Matrix> WN_stratagy = WN_initilizer(N, hidden_layer_size, n_hidden_layers, final_layer_size);
     double t_mean_stratagy = 0;
-    int strategy_generations = 50;
+    int strategy_generations = 30;
     for (int i = 0; i < stratagy_gamstate_training.size(); i++) {
         t_mean_stratagy += (stratagy_N_vec[i] + 1);
     }
     t_mean_stratagy /= stratagy_gamstate_training.size();
 
+    
+
+
+
+
     network_count = 0;
-    std::vector<int> stratagy_traing_order(stratagy_gamstate_training.size());
-    std::iota(stratagy_traing_order.begin(), stratagy_traing_order.end(), 0);
+
+
+
+    std::vector<int> all_order(stratagy_gamstate_training.size());
+    std::iota(all_order.begin(), all_order.end(), 0);          
+    std::shuffle(all_order.begin(), all_order.end(), shuffle_rng);
+
+    std::size_t n_val = all_order.size() / 10;              
+
+    std::vector<int> val_order(all_order.begin(), all_order.begin() + n_val);
+    std::vector<int> train_order(all_order.begin() + n_val, all_order.end());
+
+
+
+    std::vector<float> val_mean(5, 0.0f);
+    for (int i = 0; i < val_order.size(); i++) {
+        for (int j = 0; j < 5; j++) {
+            val_mean[j] += stratagy_training[val_order[i]][j];
+        }
+    }
+    for (int j = 0; j < 5; j++) val_mean[j] /= val_order.size();
+
+    float val_target_var = 0;
+    for (int i = 0; i < val_order.size(); i++) {
+        for (int j = 0; j < 5; j++) {
+            float d = stratagy_training[val_order[i]][j] - val_mean[j];
+            val_target_var += d * d;
+        }
+    }
+    val_target_var /= (val_order.size() * 5);
+
     float q_strat = (1 / f - 1) / strategy_generations;
+
+    float best_val = 1e9f; 
+    int best_epoch = -1;
+    std::vector<Matrix> best_WN = WN_stratagy;
+
     for (int k = 0; k < strategy_generations; k++) {
         network_count++;
-        std::shuffle(stratagy_traing_order.begin(), stratagy_traing_order.end(), shuffle_rng);
+        std::shuffle(train_order.begin(), train_order.end(), shuffle_rng);
         float n = n0 / (1 + q_strat * network_count);
         std::vector <std::vector<float>> stratagy_outputs;
         float a0_strat = 0;
@@ -541,8 +649,8 @@ int main() {
         std::vector<float> acumulator = { 0,0,0,0,0 };
 
 
-        for (int i = 0; i < stratagy_gamstate_training.size(); i++) {
-            int idx = stratagy_traing_order[i];
+        for (int i = 0; i < train_order.size(); i++) {
+            int idx = train_order[i];
             std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, stratagy_gamstate_training[idx], C, hand_lookup_table, max_rounds);
             input.push_back(1);
             std::vector<float> output_stratagy = stratagy_training[idx];
@@ -553,22 +661,38 @@ int main() {
             stratagy_outputs.push_back(output_stratagy);
         }
         for (int j = 0; j < 5; j++) {
-            acumulator[j] /= stratagy_gamstate_training.size();
+            acumulator[j] /= train_order.size();
         }
-        for (int i = 0; i < stratagy_gamstate_training.size(); i++) {
+        for (int i = 0; i < train_order.size(); i++) {
             for (int j = 0; j < 5; j++) {
                 stratagy_MSE += ((stratagy_outputs[i][j] - acumulator[j]) * (stratagy_outputs[i][j] - acumulator[j]));
             }
         }
 
-        a0_strat /= (stratagy_gamstate_training.size() * 5);
-        stratagy_MSE /= stratagy_gamstate_training.size() * 5;
-        std::cout << "a0_strat / stratagy_MSE = " << a0_strat / stratagy_MSE << std::endl;
+
+        float val_err = 0;
+        for (int i = 0; i < val_order.size(); i++) {
+            int idx = val_order[i];
+            std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, stratagy_gamstate_training[idx], C, hand_lookup_table, max_rounds);
+            input.push_back(1);
+            std::vector<float> prediction = forward_pass(WN_stratagy, input, hidden_layer_size, n_hidden_layers);
+            const std::vector<float>& target = stratagy_training[idx];
+            for (int j = 0; j < 5; j++) {
+                val_err += (target[j] - prediction[j]) * (target[j] - prediction[j]);
+            }
+        }
+        float val_ratio = val_err / (val_order.size() * 5) / val_target_var;
+
+        a0_strat /= (train_order.size() * 5);
+        stratagy_MSE /= train_order.size() * 5;
+        std::cout << "k = " << k << "  train = " << a0_strat / stratagy_MSE << "  val = " << val_ratio << std::endl;
+        if (val_ratio < best_val) { 
+            best_val = val_ratio; best_epoch = k; best_WN = WN_stratagy; 
+        }
 
 
 
-
-
+        
 
         int z = WN_stratagy.size();
         for (int i = 0; i < z; i++) {
@@ -586,8 +710,9 @@ int main() {
 
 
     }
+    WN_stratagy = best_WN;
     WN_save(WN_stratagy, "WN_stratagy record");
-
+    std::cout << "best epoch = " << best_epoch << "  best val = " << best_val << std::endl;
 
 
 
@@ -688,24 +813,6 @@ int main() {
         std::cout << std::endl;
     }
 
-    {
-        std::vector<float> new_gamstate_vec = gamstate_vec;
-        Decition_Node start = Decition_Node(last_agressor, cards, n_players, history, round_history, round, player_contributions, pot, player_status, player_turn, new_gamstate_vec, round_actions_count, max_actions_r1, player_traversing, ranks, straight_lookup, P5, P4, P3, P2, P1, max_actions_r2_4, 0, C, b0, max_rounds);
-
-        auto print_actions = [](const std::string& label, const std::vector<std::string>& acts) {
-            std::cout << label << " : ";
-            for (const std::string& a : acts) std::cout << a << " ";
-            std::cout << std::endl;
-            };
-
-        print_actions("SB to act (start)", start.legal_actions());
-
-        Decition_Node after_limp = start.apply_action("call");
-        print_actions("BB after SB limp", after_limp.legal_actions());
-
-        Decition_Node after_raise = start.apply_action("raise");
-        print_actions("BB after SB raise", after_raise.legal_actions());
-    }
 
 
     return 0;

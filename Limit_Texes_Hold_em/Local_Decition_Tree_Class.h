@@ -596,7 +596,10 @@ public:
 
                     float p = 0;
                     if (total_regret == 0) {
-                        p = 1.0f / regret.size();
+                        int best = 0;
+                        for (int i = 1; i < actions.size(); i++)
+                            if (raw[action_index_.at(actions[i])] > raw[action_index_.at(actions[best])]) best = i;
+                        p = (k == best) ? 1.0f : 0.0f;
                     }
                     else {
                         p = regret[k] / total_regret;
@@ -644,7 +647,12 @@ public:
                 std::vector<float> p_dist;
                 p_dist.resize(actions.size());
                 if (total_regret == 0) {
-                    p_dist = std::vector < float>(regret.size(), 1.0f / regret.size());
+                    int best = 0;
+                    for (int i = 1; i < actions.size(); i++)
+                        if (raw[action_index_.at(actions[i])] > raw[action_index_.at(actions[best])]) best = i;
+                    for (int x = 0; x < actions.size(); x++) {
+                        p_dist[x] = (x == best) ? 1.0f : 0.0f;
+                    }
                 }
                 else {
                     for (int x = 0; x < actions.size(); x++) {

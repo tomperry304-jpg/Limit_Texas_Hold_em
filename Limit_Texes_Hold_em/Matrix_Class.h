@@ -153,7 +153,19 @@ public:
         }
     }
 
-
+    void subtract_and_clear_matrix(Matrix& M2) {
+        if (n_ == M2.n_ && m_ == M2.m_) {
+            for (std::size_t i = 0; i < n_; i++) {
+                for (std::size_t j = 0; j < m_; j++) {
+                    matrix_[i][j] += M2.matrix_[i][j];
+                    M2.matrix_[i][j] = 0;
+                }
+            }
+        }
+        else {
+            throw std::invalid_argument("dimension mismatch");
+        }
+    }
 
 
     //Scalar Multiplication (non Destructive)

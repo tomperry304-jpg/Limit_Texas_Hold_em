@@ -177,6 +177,7 @@ void weight_update(std::vector<Matrix>& WN, std::vector<float> input, int hidden
 
 
 
+
 void write_int(std::ofstream& out, int v) {
     out.write(reinterpret_cast<const char*>(&v), sizeof(int));
 }
@@ -256,6 +257,7 @@ std::vector<Matrix> WN_initilizer(int N, int hidden_layer_size, int n_hidden_lay
 }
 
 
+
 std::vector<float> forward_pass(std::vector<Matrix>& WN, std::vector<float> input, int hidden_layer_size, int n_hidden_layers) {
     // forward pass
     std::vector<float> l1_w1 = input * WN[0];
@@ -277,9 +279,19 @@ std::vector<float> forward_pass(std::vector<Matrix>& WN, std::vector<float> inpu
 
 
 int main() {
-    omp_set_num_threads(1);
+    int threads = 4;
+    int max_capacity = 200000;
+    int strategy_capacity = 200000;
+    int n_walks = 120;
+    int n_generations = 100;
+    int seed_n = 7;
+    int gernerations = 15;
+    int Cards_Dealt_per_loop = 2000;
+    int strategy_generations = 10;
+
+    omp_set_num_threads(threads);
     std::cout << omp_get_max_threads() << " threads\n";
-    std::mt19937 shuffle_rng(8);
+    std::mt19937 shuffle_rng(seed_n);
 
     int max_rounds = 2;
     int n_players = 2;
@@ -288,8 +300,12 @@ int main() {
     int max_actions_r2_4 = (C + 2) * (n_players - 1) + 1;
 
     int b0 = 2;
-    float max_player_contribution = 6*(C + 1) * b0;;
-    float max_pot = n_players*max_player_contribution;
+    float max_player_contribution = 0;
+    for (int r = 1; r <= max_rounds; r++) {
+        float unit = (r <= 2) ? b0 : 2 * b0;
+        max_player_contribution += (C + 1) * unit;
+    }
+    float max_pot = n_players * max_player_contribution;
     int n_actions = 5;
     int ranks = 4;
     std::vector<float> gamstate_vec(42 + 7*n_players + (max_actions_r1 + (max_rounds - 1) * max_actions_r2_4)*(n_actions+n_players), 0.0f);
@@ -371,7 +387,7 @@ int main() {
     
 
     int N = gamstate_vec.size();
-    int gernerations = 15;
+    
     int alpha = 2;
     int W_min = 128;
     int W_max = 1024;
@@ -380,7 +396,6 @@ int main() {
     int n_hidden_layers = L_min + floor(log2(n_players));
     int final_layer_size = 5;
 
-    int n_generations = 60   ;
     int n_per_network_update = 1;
 
     int P1 = ranks;
@@ -414,14 +429,16 @@ int main() {
     //######################################################
     //############################################################
 
-    int max_capacity = 50000;
-    int strategy_capacity = 50000;
+    
 
     long long N_regret_samples_colected = 0;
     long long N_stratagy_samples_colected = 0;
-    int Cards_Dealt_per_loop = 500;
+    
     double traverse_sec = 0, train_sec = 0;
+    std::cout << "threads = " << threads <<"  seed = "<< seed_n <<"  capacity = " << max_capacity << std::endl;
 
+
+    
     for (int j = 0; j < n_generations; j++) {
         auto t_a = std::chrono::steady_clock::now();
         for (int i = 0; i < Cards_Dealt_per_loop; i++) {
@@ -452,7 +469,7 @@ int main() {
             std::vector<int> regret_val_order(regret_all_order.begin(), regret_all_order.begin() + n_val);
             std::vector<int> regret_train_order(regret_all_order.begin() + n_val, regret_all_order.end());
 
-
+            std::vector<float> train_mean(5, 0.0f);
 
             std::vector<float> val_mean(5, 0.0f);
             for (int i = 0; i < regret_val_order.size(); i++) {
@@ -473,6 +490,22 @@ int main() {
 
 
 
+            for (int i = 0; i < regret_train_order.size(); i++) {
+                for (int a = 0; a < 5; a++) {
+                    train_mean[a] += regret_training[regret_train_order[i]][a] / max_pot;
+                }
+            }
+            for (int a = 0; a < 5; a++) train_mean[a] /= regret_train_order.size();
+
+            float train_target_var = 0;
+            for (int i = 0; i < regret_train_order.size(); i++) {
+                for (int a = 0; a < 5; a++) {
+                    float d = regret_training[regret_train_order[i]][a] / max_pot - train_mean[a];
+                    train_target_var += d * d;
+                }
+            }
+            train_target_var /= (regret_train_order.size() * 5);
+
 
             for (int i = 0; i < regret_gamstate_training.size(); i++) {
                 t_mean_reg += (regret_N_vec[i] + 1);
@@ -488,7 +521,6 @@ int main() {
             std::cout << "regret_gamstate_training.size() and stratagy_gamstate_training.size() = " << regret_gamstate_training.size() << " " << stratagy_gamstate_training.size() << std::endl;
 
 
-            std::vector <std::vector<float>> outputs;
             float best_val = 1e30f;
             int best_epoch = -1;
             std::vector<Matrix> best_WN = WN;
@@ -501,36 +533,37 @@ int main() {
                 
                 float n = n0 / (1 + q * network_count);
 
-                outputs.clear();
                 
-                float regret_MSE = 0;
                 
 
-                std::vector<float> acumulator(5,0);
                 
-                for (int i = 0; i < regret_train_order.size(); i++) {
+                int n_train = (int)regret_train_order.size();
+                int n_serial = (k == 0) ? std::min(1000, n_train) : 0;
+
+                for (int i = 0; i < n_serial; i++) { 
                     int idx = regret_train_order[i];
                     std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, regret_gamstate_training[idx], C, hand_lookup_table, max_rounds);
                     input.push_back(1);
                     std::vector<float> output = regret_normalisation(max_pot, regret_training[idx]);
-                    weight_update(WN, input, hidden_layer_size, n_hidden_layers, output,n, regret_N_vec[idx], t_mean_reg, a0_regret);
-                    
-                    for (int j = 0; j < 5; j++) {
-                        acumulator[j] += output[j];
-                    }
-                    outputs.push_back(output);
+                    weight_update(WN, input, hidden_layer_size, n_hidden_layers, output, n, regret_N_vec[idx], t_mean_reg, a0_regret);
                 }
-                for (int j = 0; j < 5; j++) {
-                    acumulator[j] /= regret_train_order.size();
+#pragma omp parallel for schedule(static) reduction(+:a0_regret)
+                for (int i = n_serial; i < n_train; i++) {
+                    int idx = regret_train_order[i];
+                    std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, regret_gamstate_training[idx], C, hand_lookup_table, max_rounds);
+                    input.push_back(1);
+                    std::vector<float> output = regret_normalisation(max_pot, regret_training[idx]);
+                    weight_update(WN, input, hidden_layer_size, n_hidden_layers, output, n, regret_N_vec[idx], t_mean_reg, a0_regret);
+
+
                 }
-                for (int i = 0; i < regret_train_order.size(); i++) {
-                    for (int j = 0; j < 5; j++) {
-                        regret_MSE += ((outputs[i][j] - acumulator[j]) * (outputs[i][j] - acumulator[j]));
-                    }
-                }
+                
+                
 
                 float reg_err = 0;
-                for (int i = 0; i < regret_val_order.size(); i++) {
+                int n_valid = (int)regret_val_order.size();
+#pragma omp parallel for schedule(static) reduction(+:reg_err)
+                for (int i = 0; i < n_valid; i++) {
                     int idx = regret_val_order[i];
                     std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, regret_gamstate_training[idx], C, hand_lookup_table, max_rounds);
                     input.push_back(1);
@@ -543,10 +576,10 @@ int main() {
                 float val_ratio = reg_err / (regret_val_order.size() * 5) / val_target_var;
 
                 a0_regret /= (regret_train_order.size() * 5);
-                regret_MSE /= regret_train_order.size() * 5;
-                std::cout <<"j = " << j << "  k = " << k << "  train = " << a0_regret / regret_MSE << "  val = " << val_ratio << std::endl;
+                std::cout <<"j = " << j << "  k = " << k << "  train = " << a0_regret / train_target_var << "  val = " << val_ratio << std::endl;
                 if (val_ratio < best_val) {
                     best_val = val_ratio; best_epoch = k; best_WN = WN  ;
+                    
                 }
 
 
@@ -559,7 +592,7 @@ int main() {
             
 
 
-
+            if (best_epoch == -1) throw std::runtime_error("value net diverged at j = " + std::to_string(j));
             train_sec += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_b).count();
             WN = best_WN;
             int z = WN.size();
@@ -590,7 +623,7 @@ int main() {
 
     std::vector<Matrix> WN_stratagy = WN_initilizer(N, hidden_layer_size, n_hidden_layers, final_layer_size);
     double t_mean_stratagy = 0;
-    int strategy_generations = 30;
+    
     for (int i = 0; i < stratagy_gamstate_training.size(); i++) {
         t_mean_stratagy += (stratagy_N_vec[i] + 1);
     }
@@ -633,45 +666,60 @@ int main() {
     }
     val_target_var /= (val_order.size() * 5);
 
+
+    std::vector<float> train_mean_s(5, 0.0f);
+    for (int i = 0; i < train_order.size(); i++) {
+        for (int a = 0; a < 5; a++) {
+            train_mean_s[a] += stratagy_training[train_order[i]][a];
+        }
+    }
+    for (int a = 0; a < 5; a++) train_mean_s[a] /= train_order.size();
+
+    float train_target_var_s = 0;
+    for (int i = 0; i < train_order.size(); i++) {
+        for (int a = 0; a < 5; a++) {
+            float d = stratagy_training[train_order[i]][a] - train_mean_s[a];
+            train_target_var_s += d * d;
+        }
+    }
+    train_target_var_s /= (train_order.size() * 5);
+
     float q_strat = (1 / f - 1) / strategy_generations;
 
-    float best_val = 1e9f; 
+    float best_val = 1e9f;
     int best_epoch = -1;
     std::vector<Matrix> best_WN = WN_stratagy;
 
     for (int k = 0; k < strategy_generations; k++) {
+
         network_count++;
         std::shuffle(train_order.begin(), train_order.end(), shuffle_rng);
         float n = n0 / (1 + q_strat * network_count);
-        std::vector <std::vector<float>> stratagy_outputs;
         float a0_strat = 0;
-        float stratagy_MSE = 0;
-        std::vector<float> acumulator = { 0,0,0,0,0 };
 
+        int n_train_s = (int)train_order.size();
+        int n_serial_s = (k == 0) ? std::min(1000, n_train_s) : 0;
 
-        for (int i = 0; i < train_order.size(); i++) {
+        for (int i = 0; i < n_serial_s; i++) {
             int idx = train_order[i];
             std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, stratagy_gamstate_training[idx], C, hand_lookup_table, max_rounds);
             input.push_back(1);
             std::vector<float> output_stratagy = stratagy_training[idx];
             weight_update(WN_stratagy, input, hidden_layer_size, n_hidden_layers, output_stratagy, n, stratagy_N_vec[idx], t_mean_stratagy, a0_strat);
-            for (int j = 0; j < 5; j++) {
-                acumulator[j] += output_stratagy[j];
-            }
-            stratagy_outputs.push_back(output_stratagy);
         }
-        for (int j = 0; j < 5; j++) {
-            acumulator[j] /= train_order.size();
+#pragma omp parallel for schedule(static) reduction(+:a0_strat)
+        for (int i = n_serial_s; i < n_train_s; i++) {
+            int idx = train_order[i];
+            std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, stratagy_gamstate_training[idx], C, hand_lookup_table, max_rounds);
+            input.push_back(1);
+            std::vector<float> output_stratagy = stratagy_training[idx];
+            weight_update(WN_stratagy, input, hidden_layer_size, n_hidden_layers, output_stratagy, n, stratagy_N_vec[idx], t_mean_stratagy, a0_strat);
         }
-        for (int i = 0; i < train_order.size(); i++) {
-            for (int j = 0; j < 5; j++) {
-                stratagy_MSE += ((stratagy_outputs[i][j] - acumulator[j]) * (stratagy_outputs[i][j] - acumulator[j]));
-            }
-        }
-
 
         float val_err = 0;
-        for (int i = 0; i < val_order.size(); i++) {
+        int n_valid_s = (int)val_order.size();
+#pragma omp parallel for schedule(static) reduction(+:val_err)
+        for (int i = 0; i < n_valid_s; i++) {
             int idx = val_order[i];
             std::vector<float> input = gamstate_normalisation(max_pot, max_player_contribution, ranks, n_players, stratagy_gamstate_training[idx], C, hand_lookup_table, max_rounds);
             input.push_back(1);
@@ -684,8 +732,7 @@ int main() {
         float val_ratio = val_err / (val_order.size() * 5) / val_target_var;
 
         a0_strat /= (train_order.size() * 5);
-        stratagy_MSE /= train_order.size() * 5;
-        std::cout << "k = " << k << "  train = " << a0_strat / stratagy_MSE << "  val = " << val_ratio << std::endl;
+        std::cout << "k = " << k << "  train = " << a0_strat / train_target_var_s << "  val = " << val_ratio << std::endl;
         if (val_ratio < best_val) { 
             best_val = val_ratio; best_epoch = k; best_WN = WN_stratagy; 
         }
@@ -726,7 +773,7 @@ int main() {
 
     std::mt19937 eval_rng(12345);
 
-    int n_walks = 120;
+
     std::vector<std::vector<int>> sampled;
     std::sample(predetor_possible_hands.begin(), predetor_possible_hands.end(),
     std::back_inserter(sampled), n_walks, eval_rng);
